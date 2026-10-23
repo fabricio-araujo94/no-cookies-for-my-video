@@ -31,6 +31,24 @@ function formatTime(seconds) {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+function showToast(message, type = 'info') {
+    let toast = document.getElementById('toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toast';
+        toast.className = 'toast';
+        document.body.appendChild(toast);
+    }
+    
+    toast.textContent = message;
+    toast.style.borderLeftColor = type === 'error' ? 'var(--danger-color)' : 'var(--accent-color)';
+    
+    toast.classList.add('show');
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3000);
+}
+
 // --- Storage Management ---
 
 function loadVideos() {
@@ -55,11 +73,12 @@ function saveVideos() {
 async function addVideo(url) {
     const videoId = extractVideoId(url);
     if (!videoId) {
-        alert('Invalid YouTube URL. Please check the format.');
+        showToast('Invalid YouTube URL. Please check the format.', 'error');
         return;
     }
 
     if (videos.some(v => v.id === videoId)) {
+        showToast('Video already in playlist. Loading...', 'info');
         loadVideo(videoId);
         return;
     }
@@ -88,6 +107,7 @@ async function addVideo(url) {
     loadVideo(videoId);
     
     urlInput.value = '';
+    showToast('Video added successfully!');
 }
 
 function deleteVideo(videoId, event) {
@@ -107,6 +127,7 @@ function deleteVideo(videoId, event) {
             emptyStateEl.style.display = 'block';
             stopSavingTime();
         }
+        showToast('Video removed.');
     }
 }
 
@@ -128,6 +149,85 @@ function loadVideo(videoId) {
             }
         }, 100);
     }
+}
+
+// --- Import/Export Functionality ---
+
+function exportData() {
+    if (videos.length === 0) {
+        showToast('No data to export.', 'error');
+        return;
+    }
+
+    const dataStr = JSON.stringify(videos, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `no-cookies-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    showToast('Data exported successfully!');
+}
+
+function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const importedData = JSON.parse(e.target.result);
+            
+            if (!Array.isArray(importedData)) {
+                throw new Error('Invalid data format: expected an array.');
+            }
+
+            const validItems = importedData.filter(item => 
+                item && typeof item.id === 'string' && item.id.length === 11
+            );
+
+            if (validItems.length === 0) {
+                showToast('No valid videos found in the file.', 'error');
+                return;
+            }
+
+            // Smart Merge: Combine arrays, keeping the highest currentTime for duplicates
+            const mergedMap = new Map();
+            videos.forEach(v => mergedMap.set(v.id, v));
+            
+            validItems.forEach(v => {
+                const existing = mergedMap.get(v.id);
+                if (!existing || (v.currentTime || 0) > (existing.currentTime || 0)) {
+                    mergedMap.set(v.id, {
+                        id: v.id,
+                        title: v.title || `Video ${v.id}`,
+                        currentTime: v.currentTime || 0,
+                        addedAt: v.addedAt || Date.now()
+                    });
+                }
+            });
+
+            videos = Array.from(mergedMap.values());
+            videos.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+
+            saveVideos();
+            renderVideoList();
+            showToast(`Successfully imported ${validItems.length} video(s).`);
+            
+        } catch (error) {
+            console.error('Import error:', error);
+            showToast('Failed to import. Invalid JSON file.', 'error');
+        } finally {
+            event.target.value = ''; // Reset input
+        }
+    };
+    
+    reader.readAsText(file);
 }
 
 // --- YouTube IFrame API Integration ---
@@ -153,20 +253,19 @@ function initOrUpdatePlayer(videoId, startSeconds) {
             playerVars: {
                 'playsinline': 1,
                 'start': Math.floor(startSeconds),
-                'rel': 0 // Minimize related videos from other channels
+                'rel': 0 
             },
             events: {
                 'onReady': onPlayerReady,
                 'onStateChange': onPlayerStateChange
             },
-            host: 'https://www.youtube-nocookie.com' // Privacy-enhanced mode
+            host: 'https://www.youtube-nocookie.com'
         });
     }
 }
 
 function onPlayerReady(event) {
-    // Player is ready. We can optionally auto-play here if desired.
-    // event.target.playVideo();
+    // Player is ready
 }
 
 function onPlayerStateChange(event) {
@@ -186,7 +285,7 @@ function startSavingTime() {
             const time = player.getCurrentTime();
             updateVideoTime(currentVideoId, time);
         }
-    }, 5000); // Save every 5 seconds while playing
+    }, 5000);
 }
 
 function stopSavingTime() {
@@ -225,10 +324,11 @@ function renderVideoList() {
     videos.forEach(video => {
         const li = document.createElement('li');
         li.className = `video-item ${video.id === currentVideoId ? 'active' : ''}`;
-        li.setAttribute('data-id', video.id); // Added for efficient DOM updates
+        li.setAttribute('data-id', video.id);
         li.onclick = () => loadVideo(video.id);
 
         li.innerHTML = `
+            <img src="https://img.youtube.com/vi/${video.id}/default.jpg" alt="Thumbnail" class="video-thumb" loading="lazy">
             <div class="video-info">
                 <span class="video-title" title="${video.title}">${video.title}</span>
                 <span class="video-time">Watched: ${formatTime(video.currentTime)}</span>
@@ -251,16 +351,11 @@ form.addEventListener('submit', (e) => {
     if (url) addVideo(url);
 });
 
-exportBtn.addEventListener('click', () => {
-    alert('Export functionality will be implemented in Step 4.');
-});
-
-importFileInput.addEventListener('change', () => {
-    alert('Import functionality will be implemented in Step 4.');
-});
+exportBtn.addEventListener('click', exportData);
+importFileInput.addEventListener('change', importData);
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
     loadVideos();
-    loadYouTubeAPI(); // Preload the YouTube API script
+    loadYouTubeAPI();
 });
