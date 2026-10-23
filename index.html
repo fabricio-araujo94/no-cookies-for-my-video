@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>No Cookies for My Video</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>No Cookies for My Video</h1>
+            <div class="controls">
+                <form id="add-video-form">
+                    <input type="text" id="video-url" placeholder="Paste YouTube URL here..." required>
+                    <button type="submit">Add Video</button>
+                </form>
+                <div class="backup-controls">
+                    <button id="export-btn">Export Data</button>
+                    <label for="import-file" class="import-btn">Import Data</label>
+                    <input type="file" id="import-file" accept=".json" hidden>
+                </div>
+            </div>
+        </header>
+
+        <main class="app-main">
+            <div class="player-container">
+                <div id="player"></div>
+                <p id="empty-state">Add a video to start watching distraction-free.</p>
+            </div>
+        </main>
+
+        <aside class="app-sidebar">
+            <h2>Playlist</h2>
+            <ul id="video-list" class="video-list">
+                <!-- Video items will be injected here by JS -->
+            </ul>
+        </aside>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
