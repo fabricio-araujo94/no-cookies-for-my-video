@@ -3,6 +3,10 @@ let videos = [];
 let currentVideoId = null;
 const STORAGE_KEY = 'nocookies_videos';
 
+// Player management
+let player = null;
+let saveInterval = null;
+
 // DOM Elements
 const form = document.getElementById('add-video-form');
 const urlInput = document.getElementById('video-url');
@@ -14,22 +18,12 @@ const importFileInput = document.getElementById('import-file');
 
 // --- Utility Functions ---
 
-/**
- * Extracts the 11-character YouTube video ID from various URL formats.
- * @param {string} url - The YouTube URL.
- * @returns {string|null} The video ID or null if invalid.
- */
 function extractVideoId(url) {
     const regex = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
     const match = url.match(regex);
     return match ? match[1] : null;
 }
 
-/**
- * Formats seconds into MM:SS string.
- * @param {number} seconds 
- * @returns {string}
- */
 function formatTime(seconds) {
     if (!seconds || isNaN(seconds)) return '00:00';
     const mins = Math.floor(seconds / 60);
@@ -66,12 +60,10 @@ async function addVideo(url) {
     }
 
     if (videos.some(v => v.id === videoId)) {
-        alert('This video is already in your playlist.');
-        loadVideo(videoId); // Just load it if it exists
+        loadVideo(videoId);
         return;
     }
 
-    // Fetch title using noembed (free, no API key required)
     let title = `Video ${videoId}`;
     try {
         const response = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
@@ -90,38 +82,134 @@ async function addVideo(url) {
         addedAt: Date.now()
     };
 
-    videos.unshift(newVideo); // Add to top of list
+    videos.unshift(newVideo);
     saveVideos();
     renderVideoList();
     loadVideo(videoId);
     
-    urlInput.value = ''; // Clear input
+    urlInput.value = '';
 }
 
 function deleteVideo(videoId, event) {
-    event.stopPropagation(); // Prevent triggering the play action
+    event.stopPropagation();
     if (confirm('Remove this video from your playlist?')) {
         videos = videos.filter(v => v.id !== videoId);
         saveVideos();
         renderVideoList();
         
-        // If the deleted video was playing, clear the player
         if (currentVideoId === videoId) {
             currentVideoId = null;
+            if (player && typeof player.destroy === 'function') {
+                player.destroy();
+                player = null;
+            }
             playerEl.innerHTML = '';
             emptyStateEl.style.display = 'block';
+            stopSavingTime();
         }
     }
 }
 
 function loadVideo(videoId) {
     currentVideoId = videoId;
-    renderVideoList(); // To update the 'active' class
+    renderVideoList();
     
-    // We will replace this with actual YT.Player logic next.
-    console.log(`Loading video: ${videoId}`);
+    const video = videos.find(v => v.id === videoId);
+    const startSeconds = video ? video.currentTime : 0;
     emptyStateEl.style.display = 'none';
-    playerEl.innerHTML = `<div style="color: white; display: flex; align-items: center; justify-content: center; height: 100%;">Player loading for ${videoId}... (Step 3)</div>`;
+
+    if (window.YT && window.YT.Player) {
+        initOrUpdatePlayer(videoId, startSeconds);
+    } else {
+        const checkAPI = setInterval(() => {
+            if (window.YT && window.YT.Player) {
+                clearInterval(checkAPI);
+                initOrUpdatePlayer(videoId, startSeconds);
+            }
+        }, 100);
+    }
+}
+
+// --- YouTube IFrame API Integration ---
+
+function loadYouTubeAPI() {
+    if (document.getElementById('youtube-iframe-api')) return;
+    const tag = document.createElement('script');
+    tag.id = 'youtube-iframe-api';
+    tag.src = "https://www.youtube.com/iframe_api";
+    const firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+}
+
+function initOrUpdatePlayer(videoId, startSeconds) {
+    if (player && typeof player.loadVideoById === 'function') {
+        player.loadVideoById({
+            videoId: videoId,
+            startSeconds: Math.floor(startSeconds)
+        });
+    } else {
+        player = new YT.Player('player', {
+            videoId: videoId,
+            playerVars: {
+                'playsinline': 1,
+                'start': Math.floor(startSeconds),
+                'rel': 0 // Minimize related videos from other channels
+            },
+            events: {
+                'onReady': onPlayerReady,
+                'onStateChange': onPlayerStateChange
+            },
+            host: 'https://www.youtube-nocookie.com' // Privacy-enhanced mode
+        });
+    }
+}
+
+function onPlayerReady(event) {
+    // Player is ready. We can optionally auto-play here if desired.
+    // event.target.playVideo();
+}
+
+function onPlayerStateChange(event) {
+    if (event.data === YT.PlayerState.PAUSED || event.data === YT.PlayerState.ENDED) {
+        const time = player.getCurrentTime();
+        updateVideoTime(currentVideoId, time);
+        stopSavingTime();
+    } else if (event.data === YT.PlayerState.PLAYING) {
+        startSavingTime();
+    }
+}
+
+function startSavingTime() {
+    if (saveInterval) clearInterval(saveInterval);
+    saveInterval = setInterval(() => {
+        if (player && typeof player.getPlayerState === 'function' && player.getPlayerState() === YT.PlayerState.PLAYING) {
+            const time = player.getCurrentTime();
+            updateVideoTime(currentVideoId, time);
+        }
+    }, 5000); // Save every 5 seconds while playing
+}
+
+function stopSavingTime() {
+    if (saveInterval) {
+        clearInterval(saveInterval);
+        saveInterval = null;
+    }
+}
+
+function updateVideoTime(videoId, time) {
+    const video = videos.find(v => v.id === videoId);
+    if (video) {
+        video.currentTime = time;
+        saveVideos();
+        updateTimeInDOM(videoId, time);
+    }
+}
+
+function updateTimeInDOM(videoId, time) {
+    const timeEl = document.querySelector(`.video-item[data-id="${videoId}"] .video-time`);
+    if (timeEl) {
+        timeEl.textContent = `Watched: ${formatTime(time)}`;
+    }
 }
 
 // --- Rendering ---
@@ -137,6 +225,7 @@ function renderVideoList() {
     videos.forEach(video => {
         const li = document.createElement('li');
         li.className = `video-item ${video.id === currentVideoId ? 'active' : ''}`;
+        li.setAttribute('data-id', video.id); // Added for efficient DOM updates
         li.onclick = () => loadVideo(video.id);
 
         li.innerHTML = `
@@ -162,7 +251,6 @@ form.addEventListener('submit', (e) => {
     if (url) addVideo(url);
 });
 
-// Placeholder listeners for Step 4 (Import/Export)
 exportBtn.addEventListener('click', () => {
     alert('Export functionality will be implemented in Step 4.');
 });
@@ -172,4 +260,7 @@ importFileInput.addEventListener('change', () => {
 });
 
 // --- Initialization ---
-document.addEventListener('DOMContentLoaded', loadVideos);
+document.addEventListener('DOMContentLoaded', () => {
+    loadVideos();
+    loadYouTubeAPI(); // Preload the YouTube API script
+});
